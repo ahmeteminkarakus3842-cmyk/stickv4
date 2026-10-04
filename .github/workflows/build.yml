@@ -1,0 +1,93 @@
+name: Build APK and EXE
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Proje dosyalarini olustur
+        shell: bash
+        run: |
+          mkdir -p www electron
+          if [ -f index.html ]; then cp index.html www/index.html; elif [ ! -f www/index.html ]; then echo "index.html bulunamadi"; exit 1; fi
+          cat > electron/main.js <<'EOF'
+          const { app, BrowserWindow, Menu } = require('electron');
+          const path = require('path');
+          function createWindow() {
+            const win = new BrowserWindow({ width: 1280, height: 720, backgroundColor: '#000000', autoHideMenuBar: true, title: 'Stickman Fighter' });
+            Menu.setApplicationMenu(null);
+            win.loadFile(path.join(__dirname, '..', 'www', 'index.html'));
+            win.webContents.on('before-input-event', (e, i) => {
+              if (i.type === 'keyDown' && i.key === 'F11') win.setFullScreen(!win.isFullScreen());
+            });
+          }
+          app.whenReady().then(createWindow);
+          app.on('window-all-closed', () => app.quit());
+          EOF
+          cat > package.json <<'EOF'
+          {
+            "name": "stickman-fighter",
+            "version": "1.0.0",
+            "description": "Stickman Fighter",
+            "author": "Stickman Fighter",
+            "main": "electron/main.js",
+            "devDependencies": { "electron": "^31.3.0", "electron-builder": "^24.13.3" },
+            "build": {
+              "appId": "com.stickman.fighter",
+              "productName": "Stickman Fighter",
+              "files": ["electron/**", "www/**", "package.json"],
+              "directories": { "output": "dist" },
+              "win": { "target": ["portable"] }
+            }
+          }
+          EOF
+      - run: npm install --no-audit --no-fund
+      - run: npx electron-builder --win portable --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.exe
+
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Proje dosyalarini olustur
+        run: |
+          mkdir -p www
+          if [ -f index.html ]; then cp index.html www/index.html; elif [ ! -f www/index.html ]; then echo "index.html bulunamadi"; exit 1; fi
+          cat > package.json <<'EOF'
+          {
+            "name": "stickman-fighter",
+            "version": "1.0.0",
+            "private": true,
+            "dependencies": { "@capacitor/android": "^6.1.2", "@capacitor/cli": "^6.1.2", "@capacitor/core": "^6.1.2" }
+          }
+          EOF
+          cat > capacitor.config.json <<'EOF'
+          { "appId": "com.stickman.fighter", "appName": "Stickman Fighter", "webDir": "www", "backgroundColor": "#000000" }
+          EOF
+      - run: npm install --no-audit --no-fund
+      - run: npx cap add android
+      - name: Yatay ekran
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's|<activity|<activity android:screenOrientation="sensorLandscape"|' $M
+      - run: npx cap sync android
+      - name: APK derle
+        working-directory: android
+        run: chmod +x gradlew && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: android/app/build/outputs/apk/debug/*.apk
